@@ -56,6 +56,13 @@
 
     .header-actions {
       display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+    }
+
+    .header-top-row {
+      display: flex;
       align-items: center;
       gap: 10px;
     }
@@ -117,6 +124,17 @@
       color: #e5e7eb;
       font-size: 0.9rem;
       width: 140px;
+    }
+
+    .signed-info {
+      font-size: 0.75rem;
+      color: #9ca3af;
+      text-align: right;
+    }
+
+    .signed-info strong {
+      font-weight: 600;
+      color: #e5e7eb;
     }
 
     .summary-layout {
@@ -441,7 +459,8 @@
     body.light label,
     body.light th,
     body.light .summary-label,
-    body.light .summary-table-title {
+    body.light .summary-table-title,
+    body.light .signed-info {
       color: #4b5563;
     }
 
@@ -481,6 +500,12 @@
       .summary-card {
         grid-template-columns: 1fr;
       }
+      .header-actions {
+        align-items: flex-start;
+      }
+      .signed-info {
+        text-align: left;
+      }
     }
 
     @media (max-width: 768px) {
@@ -516,7 +541,8 @@
       .chart-card,
       #transactionForm,
       .theme-toggle,
-      .auth-btn {  /* hide inputs, chart, buttons, auth in PDF/print */
+      .auth-btn,
+      .signed-info {  /* hide UI in PDF/print */
         display: none !important;
       }
     }
@@ -530,14 +556,22 @@
         <p>Track your daily incomes & expenses in ₹ with a clean view.</p>
       </div>
       <div class="header-actions">
-        <button type="button" class="theme-toggle" id="themeToggleBtn">☀️</button>
-        <button type="button" class="auth-btn" id="googleAuthBtn" data-state="signed-out">
-          <span id="authBtnLabel">Sign in with Google</span>
-        </button>
-        <!-- Profile name: hidden until login -->
-        <div class="name-input" id="profileWrapper" style="display: none;">
-          <span>👤 Profile:</span>
-          <input id="userName" type="text" placeholder="Enter profile name" disabled />
+        <div class="header-top-row">
+          <button type="button" class="theme-toggle" id="themeToggleBtn">☀️</button>
+          <button type="button" class="auth-btn" id="googleAuthBtn" data-state="signed-out">
+            <span id="authBtnLabel">Sign in with Google</span>
+          </button>
+          <!-- Profile name: hidden until login -->
+          <div class="name-input" id="profileWrapper" style="display: none;">
+            <span>👤 Profile:</span>
+            <input id="userName" type="text" placeholder="Enter profile name" disabled />
+          </div>
+        </div>
+        <div id="signedInInfo" class="signed-info" style="display: none;">
+          Signed in as: <strong id="signedEmail"></strong>
+          <span id="signedProfileWrapper" style="display:none;">
+            &nbsp; (Profile: <strong id="signedProfile"></strong>)
+          </span>
         </div>
       </div>
     </header>
@@ -738,6 +772,11 @@
     const googleAuthBtn = document.getElementById("googleAuthBtn");
     const authBtnLabel = document.getElementById("authBtnLabel");
 
+    const signedInInfo = document.getElementById("signedInInfo");
+    const signedEmailEl = document.getElementById("signedEmail");
+    const signedProfileWrapper = document.getElementById("signedProfileWrapper");
+    const signedProfileEl = document.getElementById("signedProfile");
+
     const form = document.getElementById("transactionForm");
     const dateInput = document.getElementById("date");
     const typeInput = document.getElementById("type");
@@ -821,10 +860,29 @@
       setTheme(isLight ? "dark" : "light");
     });
 
+    // ---------- INFO LABEL ----------
+    function updateSignedInfo() {
+      if (!currentUser) {
+        signedInInfo.style.display = "none";
+        return;
+      }
+      signedInInfo.style.display = "block";
+      signedEmailEl.textContent = currentUser.email || "unknown";
+
+      if (currentProfileName) {
+        signedProfileWrapper.style.display = "inline";
+        signedProfileEl.textContent = currentProfileName;
+      } else {
+        signedProfileWrapper.style.display = "none";
+        signedProfileEl.textContent = "";
+      }
+    }
+
     // ---------- FIRESTORE CLOUD SAVE/LOAD ----------
     async function loadFromCloud(profileName) {
       if (!currentUser || !profileName) return;
       currentProfileName = profileName;
+      updateSignedInfo();
 
       const id = getDocId();
       const ref = doc(db, "expenseUsers", id);
@@ -897,6 +955,7 @@
           currentProfileName = storedProfile;
           userNameInput.value = storedProfile;
           greeting.textContent = `Hi, ${storedProfile} 👋`;
+          updateSignedInfo();
           // Load data for this profile
           loadFromCloud(storedProfile);
         } else {
@@ -905,6 +964,7 @@
           greeting.textContent = user.displayName
             ? `Hi, ${user.displayName} 👋`
             : "Hi there 👋";
+          updateSignedInfo();
           clearUiData();
         }
       } else {
@@ -921,6 +981,7 @@
 
         greeting.textContent = "Expense Tracker";
         clearUiData();
+        updateSignedInfo();
       }
     }
 
@@ -964,6 +1025,8 @@
       }
       // Save chosen profile for this user in localStorage
       localStorage.setItem(PROFILE_KEY_PREFIX + currentUser.uid, profile);
+      currentProfileName = profile;
+      updateSignedInfo();
       await loadFromCloud(profile);
     });
 
