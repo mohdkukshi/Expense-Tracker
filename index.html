@@ -78,6 +78,23 @@
       transform: scale(0.96);
     }
 
+    .auth-btn {
+      padding: 7px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      background: #020617;
+      color: #e5e7eb;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .auth-btn:active {
+      transform: scale(0.97);
+    }
+
     .name-input {
       display: flex;
       align-items: center;
@@ -498,7 +515,8 @@
       .filter-bar,
       .chart-card,
       #transactionForm,
-      .theme-toggle {  /* hide inputs, chart, buttons in PDF/print */
+      .theme-toggle,
+      .auth-btn {  /* hide inputs, chart, buttons, auth in PDF/print */
         display: none !important;
       }
     }
@@ -513,9 +531,12 @@
       </div>
       <div class="header-actions">
         <button type="button" class="theme-toggle" id="themeToggleBtn">☀️</button>
+        <button type="button" class="auth-btn" id="googleAuthBtn" data-state="signed-out">
+          <span id="authBtnLabel">Sign in with Google</span>
+        </button>
         <div class="name-input">
-          <span>👤 Name:</span>
-          <input id="userName" type="text" placeholder="Enter your name" />
+          <span>👤 Profile:</span>
+          <input id="userName" type="text" placeholder="Enter profile name" disabled />
         </div>
       </div>
     </header>
@@ -663,13 +684,51 @@
     </section>
   </div>
 
-  <script>
-    const STORAGE_KEY = "simpleExpenseTracker_v1";
+  <!-- MAIN APP LOGIC + FIREBASE (MODULE) -->
+  <script type="module">
+    // Firebase v12 modular imports
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-analytics.js";
+    import {
+      getFirestore,
+      doc,
+      getDoc,
+      setDoc,
+      serverTimestamp,
+    } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+    import {
+      getAuth,
+      GoogleAuthProvider,
+      signInWithPopup,
+      onAuthStateChanged,
+      signOut,
+    } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+
+    // Your Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDwrYnVYA_u5VFo2M_7MwQBSsKzYyw_SRc",
+      authDomain: "expense-tracker-c8a85.firebaseapp.com",
+      projectId: "expense-tracker-c8a85",
+      storageBucket: "expense-tracker-c8a85.firebasestorage.app",
+      messagingSenderId: "75044120908",
+      appId: "1:75044120908:web:f254aa03993651fd8d07e9",
+      measurementId: "G-RF2HK663L6"
+    };
+
+    // Init Firebase
+    const app = initializeApp(firebaseConfig);
+    getAnalytics(app);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    const provider = new GoogleAuthProvider();
+
     const THEME_KEY = "simpleExpenseTracker_theme";
 
     const userNameInput = document.getElementById("userName");
     const greeting = document.getElementById("greeting");
     const themeToggleBtn = document.getElementById("themeToggleBtn");
+    const googleAuthBtn = document.getElementById("googleAuthBtn");
+    const authBtnLabel = document.getElementById("authBtnLabel");
 
     const form = document.getElementById("transactionForm");
     const dateInput = document.getElementById("date");
@@ -706,38 +765,19 @@
     let filterTo = "";
     let chartInstance = null;
 
+    let currentUser = null;           // Firebase user
+    let currentProfileName = "";      // Name user types after login
+
+    // Helper: combined doc ID (uid + profile name)
+    function getDocId() {
+      if (!currentUser || !currentProfileName) return null;
+      return `${currentUser.uid}__${currentProfileName}`;
+    }
+
     // Set today's date by default
     dateInput.valueAsNumber = Date.now() - new Date().getTimezoneOffset() * 60000;
 
-    function saveToStorage() {
-      const payload = {
-        name: userNameInput.value.trim(),
-        transactions: transactions
-      };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-      } catch (err) {
-        console.error("Error saving to localStorage", err);
-      }
-    }
-
-    function loadFromStorage() {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (!saved) return;
-        const data = JSON.parse(saved);
-        if (Array.isArray(data.transactions)) {
-          transactions = data.transactions;
-        }
-        if (data.name) {
-          userNameInput.value = data.name;
-          greeting.textContent = `Hi, ${data.name} 👋`;
-        }
-      } catch (err) {
-        console.error("Error loading from localStorage", err);
-      }
-    }
-
+    // ---------- THEME ----------
     function initTheme() {
       const saved = localStorage.getItem(THEME_KEY);
       if (saved === "light") {
@@ -773,6 +813,48 @@
       setTheme(isLight ? "dark" : "light");
     });
 
+    // ---------- FIRESTORE CLOUD SAVE/LOAD ----------
+    async function loadFromCloud(profileName) {
+      if (!currentUser || !profileName) return;
+      currentProfileName = profileName;
+
+      const id = getDocId();
+      const ref = doc(db, "expenseUsers", id);
+      const snap = await getDoc(ref);
+
+      if (!snap.exists()) {
+        transactions = [];
+        renderTransactions();
+        updateSummary();
+        updateChart();
+        renderMonthlySummary();
+        return;
+      }
+
+      const data = snap.data();
+      transactions = Array.isArray(data.transactions) ? data.transactions : [];
+      renderTransactions();
+      updateSummary();
+      updateChart();
+      renderMonthlySummary();
+    }
+
+    async function saveToCloud() {
+      const id = getDocId();
+      if (!id) return;
+      const ref = doc(db, "expenseUsers", id);
+      await setDoc(
+        ref,
+        {
+          uid: currentUser.uid,
+          profileName: currentProfileName,
+          transactions,
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true }
+      );
+    }
+
     function getVisibleTransactions() {
       if (!filterFrom && !filterTo) return transactions;
       return transactions.filter((t) => {
@@ -782,16 +864,91 @@
       });
     }
 
-    // Update greeting on name change + save
-    userNameInput.addEventListener("input", () => {
-      const name = userNameInput.value.trim();
-      greeting.textContent = name ? `Hi, ${name} 👋` : "Expense Tracker";
-      saveToStorage();
+    // ---------- AUTH UI ----------
+    function updateAuthUI(user) {
+      if (user) {
+        currentUser = user;
+        googleAuthBtn.dataset.state = "signed-in";
+        authBtnLabel.textContent = "Sign out";
+        userNameInput.disabled = false;
+
+        // If no profile yet, show greeting using Google name
+        if (!currentProfileName) {
+          greeting.textContent = user.displayName
+            ? `Hi, ${user.displayName} 👋`
+            : "Hi there 👋";
+        }
+      } else {
+        currentUser = null;
+        currentProfileName = "";
+        googleAuthBtn.dataset.state = "signed-out";
+        authBtnLabel.textContent = "Sign in with Google";
+        userNameInput.disabled = true;
+        userNameInput.value = "";
+        greeting.textContent = "Expense Tracker";
+
+        // Clear data when logged out (local view)
+        transactions = [];
+        renderTransactions();
+        updateSummary();
+        updateChart();
+        renderMonthlySummary();
+      }
+    }
+
+    googleAuthBtn.addEventListener("click", async () => {
+      const state = googleAuthBtn.dataset.state;
+      try {
+        if (state === "signed-in") {
+          await signOut(auth);
+        } else {
+          await signInWithPopup(auth, provider);
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Error with Google login. Check console.");
+      }
     });
 
-    // Handle form submit
-    form.addEventListener("submit", (e) => {
+    onAuthStateChanged(auth, (user) => {
+      updateAuthUI(user);
+    });
+
+    // ---------- NAME / PROFILE ----------
+    userNameInput.addEventListener("input", () => {
+      const profile = userNameInput.value.trim();
+      if (profile) {
+        greeting.textContent = `Hi, ${profile} 👋`;
+      } else if (currentUser?.displayName) {
+        greeting.textContent = `Hi, ${currentUser.displayName} 👋`;
+      } else {
+        greeting.textContent = "Expense Tracker";
+      }
+    });
+
+    userNameInput.addEventListener("change", async () => {
+      const profile = userNameInput.value.trim();
+      if (!profile) return;
+      if (!currentUser) {
+        alert("Please sign in with Google first.");
+        userNameInput.value = "";
+        return;
+      }
+      await loadFromCloud(profile);
+    });
+
+    // ---------- FORM SUBMIT ----------
+    form.addEventListener("submit", async (e) => {
       e.preventDefault();
+
+      if (!currentUser) {
+        alert("Please sign in with Google first.");
+        return;
+      }
+      if (!currentProfileName) {
+        alert("Please enter a profile name (top right) and press Enter.");
+        return;
+      }
 
       const date = dateInput.value;
       const type = typeInput.value;
@@ -807,10 +964,8 @@
       const transaction = { date, type, category, description, amount };
 
       if (editIndex === null) {
-        // Add new
         transactions.push(transaction);
       } else {
-        // Update existing
         transactions[editIndex] = transaction;
         editIndex = null;
         submitText.textContent = "Add Transaction";
@@ -822,13 +977,14 @@
       categoryInput.value = "Food";
       dateInput.valueAsNumber = Date.now() - new Date().getTimezoneOffset() * 60000;
 
-      saveToStorage();
+      await saveToCloud();
       renderTransactions();
       updateSummary();
       updateChart();
       renderMonthlySummary();
     });
 
+    // ---------- RENDER TABLE ----------
     function renderTransactions() {
       tbody.innerHTML = "";
 
@@ -892,6 +1048,7 @@
       });
     }
 
+    // ---------- SUMMARY ----------
     function updateSummary() {
       const visible = getVisibleTransactions();
 
@@ -916,6 +1073,7 @@
       balanceWrapper.classList.add(balance >= 0 ? "balance-positive" : "balance-negative");
     }
 
+    // ---------- CHART ----------
     function updateChart() {
       const visible = getVisibleTransactions();
       let totalIncome = 0;
@@ -936,9 +1094,9 @@
           {
             data: [totalIncome, totalExpense],
             backgroundColor: ["#22c55e", "#ef4444"],
-            borderWidth: 0
-          }
-        ]
+            borderWidth: 0,
+          },
+        ],
       };
 
       const isLight = document.body.classList.contains("light");
@@ -956,15 +1114,16 @@
             plugins: {
               legend: {
                 labels: {
-                  color: legendColor
-                }
-              }
-            }
-          }
+                  color: legendColor,
+                },
+              },
+            },
+          },
         });
       }
     }
 
+    // ---------- MONTHLY SUMMARY ----------
     function renderMonthlySummary() {
       monthlyBody.innerHTML = "";
       const visible = getVisibleTransactions();
@@ -990,12 +1149,12 @@
         }
       });
 
-      const keys = Object.keys(map).sort(); // ascending by YYYY-MM
+      const keys = Object.keys(map).sort();
 
       keys.forEach((key) => {
         const [year, month] = key.split("-");
-        const date = new Date(Number(year), Number(month) - 1, 1);
-        const monthLabel = date.toLocaleString("en-GB", { month: "short", year: "numeric" });
+        const dt = new Date(Number(year), Number(month) - 1, 1);
+        const monthLabel = dt.toLocaleString("en-GB", { month: "short", year: "numeric" });
 
         const row = document.createElement("tr");
         const income = map[key].income;
@@ -1023,6 +1182,7 @@
       });
     }
 
+    // ---------- EDIT / DELETE ----------
     function startEdit(index) {
       const t = transactions[index];
       editIndex = index;
@@ -1038,17 +1198,7 @@
       editIndicator.style.display = "block";
     }
 
-    function cancelEdit() {
-      editIndex = null;
-      form.reset();
-      categoryInput.value = "Food";
-      dateInput.valueAsNumber = Date.now() - new Date().getTimezoneOffset() * 60000;
-      submitText.textContent = "Add Transaction";
-      submitBtn.querySelector(".icon").textContent = "＋";
-      editIndicator.style.display = "none";
-    }
-
-    function deleteTransaction(index) {
+    async function deleteTransaction(index) {
       if (!confirm("Delete this transaction?")) return;
       transactions.splice(index, 1);
 
@@ -1058,14 +1208,26 @@
         editIndex -= 1;
       }
 
-      saveToStorage();
+      await saveToCloud();
       renderTransactions();
       updateSummary();
       updateChart();
       renderMonthlySummary();
     }
 
-    // Filter events
+    function cancelEdit() {
+      editIndex = null;
+      form.reset();
+      categoryInput.value = "Food";
+      dateInput.valueAsNumber = Date.now() - new Date().getTimezoneOffset() * 60000;
+      submitText.textContent = "Add Transaction";
+      submitBtn.querySelector(".icon").textContent = "＋";
+      editIndicator.style.display = "none";
+    }
+    // expose for inline onclick
+    window.cancelEdit = cancelEdit;
+
+    // ---------- FILTER ----------
     applyFilterBtn.addEventListener("click", () => {
       filterFrom = fromDateInput.value || "";
       filterTo = toDateInput.value || "";
@@ -1086,12 +1248,11 @@
       renderMonthlySummary();
     });
 
-    // Export as PDF (using browser's Print -> Save as PDF)
+    // ---------- EXPORT ----------
     exportPdfBtn.addEventListener("click", () => {
       window.print();
     });
 
-    // Export visible data to CSV (Excel compatible)
     exportCsvBtn.addEventListener("click", () => {
       const visible = getVisibleTransactions();
       if (!visible.length) {
@@ -1108,7 +1269,7 @@
           t.type,
           t.category || "",
           t.description,
-          t.amount.toFixed(2)
+          t.amount.toFixed(2),
         ];
         const escaped = row.map((field) =>
           '"' + String(field).replace(/"/g, '""') + '"'
@@ -1129,9 +1290,8 @@
       URL.revokeObjectURL(url);
     });
 
-    // Initial load
+    // ---------- INIT ----------
     initTheme();
-    loadFromStorage();
     renderTransactions();
     updateSummary();
     updateChart();
