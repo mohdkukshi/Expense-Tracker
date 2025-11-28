@@ -534,7 +534,8 @@
         <button type="button" class="auth-btn" id="googleAuthBtn" data-state="signed-out">
           <span id="authBtnLabel">Sign in with Google</span>
         </button>
-        <div class="name-input">
+        <!-- Profile name: hidden until login -->
+        <div class="name-input" id="profileWrapper" style="display: none;">
           <span>👤 Profile:</span>
           <input id="userName" type="text" placeholder="Enter profile name" disabled />
         </div>
@@ -723,7 +724,9 @@
     const provider = new GoogleAuthProvider();
 
     const THEME_KEY = "simpleExpenseTracker_theme";
+    const PROFILE_KEY_PREFIX = "expenseProfile_";
 
+    const profileWrapper = document.getElementById("profileWrapper");
     const userNameInput = document.getElementById("userName");
     const greeting = document.getElementById("greeting");
     const themeToggleBtn = document.getElementById("themeToggleBtn");
@@ -766,7 +769,7 @@
     let chartInstance = null;
 
     let currentUser = null;           // Firebase user
-    let currentProfileName = "";      // Name user types after login
+    let currentProfileName = "";      // Profile name
 
     // Helper: combined doc ID (uid + profile name)
     function getDocId() {
@@ -865,34 +868,54 @@
     }
 
     // ---------- AUTH UI ----------
+    function clearUiData() {
+      transactions = [];
+      renderTransactions();
+      updateSummary();
+      updateChart();
+      renderMonthlySummary();
+    }
+
     function updateAuthUI(user) {
       if (user) {
         currentUser = user;
         googleAuthBtn.dataset.state = "signed-in";
         authBtnLabel.textContent = "Sign out";
+
+        // Show profile input only when signed in
+        profileWrapper.style.display = "flex";
         userNameInput.disabled = false;
 
-        // If no profile yet, show greeting using Google name
-        if (!currentProfileName) {
+        // Try to restore last profile for this user
+        const storedProfile = localStorage.getItem(PROFILE_KEY_PREFIX + user.uid);
+        if (storedProfile) {
+          currentProfileName = storedProfile;
+          userNameInput.value = storedProfile;
+          greeting.textContent = `Hi, ${storedProfile} 👋`;
+          // Load data for this profile
+          loadFromCloud(storedProfile);
+        } else {
+          currentProfileName = "";
+          userNameInput.value = "";
           greeting.textContent = user.displayName
             ? `Hi, ${user.displayName} 👋`
             : "Hi there 👋";
+          clearUiData();
         }
       } else {
+        // Signed out
         currentUser = null;
         currentProfileName = "";
         googleAuthBtn.dataset.state = "signed-out";
         authBtnLabel.textContent = "Sign in with Google";
+
+        // Hide and disable profile input
+        profileWrapper.style.display = "none";
         userNameInput.disabled = true;
         userNameInput.value = "";
-        greeting.textContent = "Expense Tracker";
 
-        // Clear data when logged out (local view)
-        transactions = [];
-        renderTransactions();
-        updateSummary();
-        updateChart();
-        renderMonthlySummary();
+        greeting.textContent = "Expense Tracker";
+        clearUiData();
       }
     }
 
@@ -906,7 +929,7 @@
         }
       } catch (err) {
         console.error(err);
-        alert("Error with Google login. Check console.");
+        alert(`Google login error: ${err.code || err.message}`);
       }
     });
 
@@ -934,6 +957,8 @@
         userNameInput.value = "";
         return;
       }
+      // Save chosen profile for this user in localStorage
+      localStorage.setItem(PROFILE_KEY_PREFIX + currentUser.uid, profile);
       await loadFromCloud(profile);
     });
 
