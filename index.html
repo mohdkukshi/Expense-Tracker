@@ -542,7 +542,8 @@
       #transactionForm,
       .theme-toggle,
       .auth-btn,
-      .signed-info {  /* hide UI in PDF/print */
+      .signed-info,
+      #adminSection {  /* hide UI in PDF/print */
         display: none !important;
       }
     }
@@ -717,6 +718,34 @@
         No data to summarize. Add transactions or change the filter.
       </div>
     </section>
+
+    <!-- Admin View (All profiles) -->
+    <section id="adminSection" class="summary-table-section" style="display:none; margin-top:16px;">
+      <h3 class="summary-table-title">Admin View – All Users & Profiles</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+        <button type="button" class="btn-secondary" id="adminLoadBtn">Load All Data</button>
+        <button type="button" class="btn-secondary" id="adminExportCsvBtn">Export Admin CSV</button>
+      </div>
+      <table class="summary-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Month</th>
+            <th>Year</th>
+            <th>Type</th>
+            <th>Category</th>
+            <th>Description</th>
+            <th>Amount (₹)</th>
+            <th>Profile</th>
+            <th>User Email</th>
+          </tr>
+        </thead>
+        <tbody id="adminBody"></tbody>
+      </table>
+      <div id="adminEmptyState" class="empty-state">
+        Click "Load All Data" to fetch all users & profiles.
+      </div>
+    </section>
   </div>
 
   <!-- MAIN APP LOGIC + FIREBASE (MODULE) -->
@@ -730,6 +759,8 @@
       getDoc,
       setDoc,
       serverTimestamp,
+      getDocs,
+      collection
     } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
     import {
       getAuth,
@@ -761,6 +792,11 @@
     provider.setCustomParameters({
       prompt: "select_account"
     });
+
+    // 👉 Put your admin email(s) here
+    const ADMIN_EMAILS = [
+      "mohdkukshi2528@gmail.com" // <-- replace with your Google login email
+    ];
 
     const THEME_KEY = "simpleExpenseTracker_theme";
     const PROFILE_KEY_PREFIX = "expenseProfile_";
@@ -806,6 +842,13 @@
     const monthlyBody = document.getElementById("monthlySummaryBody");
     const monthlyEmptyState = document.getElementById("monthlyEmptyState");
 
+    // Admin elements
+    const adminSection = document.getElementById("adminSection");
+    const adminBody = document.getElementById("adminBody");
+    const adminEmptyState = document.getElementById("adminEmptyState");
+    const adminLoadBtn = document.getElementById("adminLoadBtn");
+    const adminExportCsvBtn = document.getElementById("adminExportCsvBtn");
+
     let transactions = [];
     let editIndex = null;
     let filterFrom = "";
@@ -814,6 +857,9 @@
 
     let currentUser = null;           // Firebase user
     let currentProfileName = "";      // Profile name
+
+    // admin cache for export
+    let adminRowsCache = [];
 
     // Helper: combined doc ID (uid + profile name)
     function getDocId() {
@@ -878,6 +924,13 @@
       }
     }
 
+    // ---------- ADMIN VISIBILITY ----------
+    function toggleAdminVisibility() {
+      const email = currentUser?.email || "";
+      const isAdmin = email && ADMIN_EMAILS.includes(email);
+      adminSection.style.display = isAdmin ? "block" : "none";
+    }
+
     // ---------- FIRESTORE CLOUD SAVE/LOAD ----------
     async function loadFromCloud(profileName) {
       if (!currentUser || !profileName) return;
@@ -913,6 +966,7 @@
         ref,
         {
           uid: currentUser.uid,
+          email: currentUser.email || "",
           profileName: currentProfileName,
           transactions,
           updatedAt: serverTimestamp(),
@@ -983,6 +1037,7 @@
         clearUiData();
         updateSignedInfo();
       }
+      toggleAdminVisibility();
     }
 
     googleAuthBtn.addEventListener("click", async () => {
@@ -1341,28 +1396,237 @@
       renderMonthlySummary();
     });
 
-    // ---------- EXPORT ----------
+    // ---------- EXPORT (PER PROFILE) ----------
     exportPdfBtn.addEventListener("click", () => {
       window.print();
     });
 
     exportCsvBtn.addEventListener("click", () => {
-      const visible = getVisibleTransactions();
-      if (!visible.length) {
+      // For MIS per profile: export ALL transactions for this profile
+      if (!transactions.length) {
         alert("No transactions to export.");
         return;
       }
+      if (!currentUser || !currentProfileName) {
+        alert("Please sign in and select a profile before exporting.");
+        return;
+      }
 
-      const header = ["Date", "Type", "Category", "Description", "Amount"];
-      const rows = [header];
+      const email = currentUser.email || "";
+      const profile = currentProfileName;
 
-      visible.forEach((t) => {
+      const header = [
+        "Date",
+        "Month",
+        "Year",
+        "Type",
+        "Category",
+        "Description",
+        "Amount",
+        "Profile",
+        "Email"
+      ];
+      const rows = [];
+      rows.push(header.join(","));
+
+      transactions.forEach((t) => {
+        const dateStr = t.date || "";
+        let year = "";
+        let month = "";
+        if (dateStr && dateStr.length >= 7) {
+          year = dateStr.substring(0, 4);
+          month = dateStr.substring(5, 7);
+        }
+
         const row = [
-          t.date,
+          dateStr,
+          month,
+          year,
           t.type,
           t.category || "",
           t.description,
           t.amount.toFixed(2),
+          profile,
+          email
+        ];
+
+        const escaped = row.map((field) =>
+          '"' + String(field).replace(/"/g, '""') + '"'
+        );
+        rows.push(escaped.join(","));
+      });
+
+      const csvContent = rows.join("\r\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "expense-tracker-mis.csv";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    });
+
+    // ---------- ADMIN VIEW: LOAD ALL DATA ----------
+    async function loadAllAdminData() {
+      if (!currentUser) {
+        alert("Please sign in first.");
+        return;
+      }
+      const email = currentUser.email || "";
+      if (!ADMIN_EMAILS.includes(email)) {
+        alert("You are not allowed to view admin data.");
+        return;
+      }
+
+      adminBody.innerHTML = "";
+      adminEmptyState.textContent = "Loading all profiles from Firestore...";
+      adminRowsCache = [];
+
+      try {
+        const snap = await getDocs(collection(db, "expenseUsers"));
+        if (snap.empty) {
+          adminEmptyState.textContent = "No data found in expenseUsers collection.";
+          return;
+        }
+
+        const rows = [];
+        snap.forEach((docSnap) => {
+          const data = docSnap.data();
+          const profile = data.profileName || "";
+          const userEmail = data.email || data.uid || "";
+          const txs = Array.isArray(data.transactions) ? data.transactions : [];
+
+          txs.forEach((t) => {
+            const dateStr = t.date || "";
+            let year = "";
+            let month = "";
+            if (dateStr && dateStr.length >= 7) {
+              year = dateStr.substring(0, 4);
+              month = dateStr.substring(5, 7);
+            }
+
+            rows.push({
+              date: dateStr,
+              month,
+              year,
+              type: t.type,
+              category: t.category || "",
+              description: t.description,
+              amount: t.amount,
+              profile,
+              email: userEmail
+            });
+          });
+        });
+
+        adminRowsCache = rows;
+        renderAdminTable(rows);
+      } catch (err) {
+        console.error(err);
+        adminEmptyState.textContent = "Error loading admin data. Check console.";
+      }
+    }
+
+    function renderAdminTable(rows) {
+      adminBody.innerHTML = "";
+
+      if (!rows.length) {
+        adminEmptyState.textContent = "No transactions found across all profiles.";
+        return;
+      } else {
+        adminEmptyState.textContent = "";
+      }
+
+      rows.forEach((r) => {
+        const tr = document.createElement("tr");
+
+        const dateTd = document.createElement("td");
+        dateTd.textContent = r.date;
+
+        const monthTd = document.createElement("td");
+        monthTd.textContent = r.month;
+
+        const yearTd = document.createElement("td");
+        yearTd.textContent = r.year;
+
+        const typeTd = document.createElement("td");
+        typeTd.textContent = r.type;
+
+        const categoryTd = document.createElement("td");
+        categoryTd.textContent = r.category;
+
+        const descTd = document.createElement("td");
+        descTd.textContent = r.description;
+
+        const amountTd = document.createElement("td");
+        amountTd.innerHTML = `<span class="rupee">₹</span> ${Number(r.amount || 0).toFixed(2)}`;
+
+        const profileTd = document.createElement("td");
+        profileTd.textContent = r.profile;
+
+        const emailTd = document.createElement("td");
+        emailTd.textContent = r.email;
+
+        tr.appendChild(dateTd);
+        tr.appendChild(monthTd);
+        tr.appendChild(yearTd);
+        tr.appendChild(typeTd);
+        tr.appendChild(categoryTd);
+        tr.appendChild(descTd);
+        tr.appendChild(amountTd);
+        tr.appendChild(profileTd);
+        tr.appendChild(emailTd);
+
+        adminBody.appendChild(tr);
+      });
+    }
+
+    adminLoadBtn.addEventListener("click", loadAllAdminData);
+
+    adminExportCsvBtn.addEventListener("click", () => {
+      if (!currentUser) {
+        alert("Please sign in first.");
+        return;
+      }
+      const email = currentUser.email || "";
+      if (!ADMIN_EMAILS.includes(email)) {
+        alert("You are not allowed to export admin data.");
+        return;
+      }
+
+      if (!adminRowsCache.length) {
+        alert('No admin data loaded. Click "Load All Data" first.');
+        return;
+      }
+
+      const header = [
+        "Date",
+        "Month",
+        "Year",
+        "Type",
+        "Category",
+        "Description",
+        "Amount",
+        "Profile",
+        "Email"
+      ];
+
+      const rows = [header.join(",")];
+
+      adminRowsCache.forEach((r) => {
+        const row = [
+          r.date,
+          r.month,
+          r.year,
+          r.type,
+          r.category,
+          r.description,
+          Number(r.amount || 0).toFixed(2),
+          r.profile,
+          r.email
         ];
         const escaped = row.map((field) =>
           '"' + String(field).replace(/"/g, '""') + '"'
@@ -1376,7 +1640,7 @@
 
       const link = document.createElement("a");
       link.href = url;
-      link.download = "expense-tracker.csv";
+      link.download = "expense-tracker-admin-mis.csv";
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
