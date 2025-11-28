@@ -723,6 +723,11 @@
     const auth = getAuth(app);
     const provider = new GoogleAuthProvider();
 
+    // Always show account chooser so you can switch Gmail accounts
+    provider.setCustomParameters({
+      prompt: "select_account"
+    });
+
     const THEME_KEY = "simpleExpenseTracker_theme";
     const PROFILE_KEY_PREFIX = "expenseProfile_";
 
